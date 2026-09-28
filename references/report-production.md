@@ -38,22 +38,31 @@
    - 容器定高：网格给 `flex:1; min-height:0;`，行用 `repeat(2,1fr)`；
    - 图格改 `position:relative`，img 用 `position:absolute; inset:0; width:100%; height:100%; object-fit:cover;`，caption 用 `position:absolute; bottom:0` 压底。
    - 同类检查：任何 `height:100%` 的 img 都必须有确定高度的父链。
-2. **元素自动撑开页面**：大字号一律限高（`min(Xvw,Yvh)`），卡片内容超限时拆页或换版式，不缩小字号硬塞。
-3. **图片重复**：每张截图只出现一次；表达多个点时用一张图描述不同内容，或截新图。
-4. **截图内嵌**：交付为单 HTML 链接时，截图用 base64 内嵌（每张 JPEG 压到 1400px、quality 84，4 张约 0.9MB，全文件 ≤1MB），不引用外部相对路径。
-5. **改一处必重渲染该页**：交付后用户反馈单页问题时，修改 HTML 后必须重新渲染该页截图验证（布局几何 + 无溢出 + 无 JS 错误）再重新交付。
+2. **整页被截图自然高度撑开（双维版 P4/P5/P6 事故，页面被撑到 1311~1728px）**：`<img width:100%>`（无定高、无 object-fit）在窄栏里按原始比例渲染出几百 px 高，把内容区、gaprow、foot 全挤出页面。**所有内嵌截图必须用"定高槽"**，统一模板：
+   ```css
+   .ximg { border:2px solid var(--accent); position:relative; height:250px; overflow:hidden; background:#fff; }
+   .ximg img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+   ```
+   - 槽位高度按栏宽估算（栏宽 430px、原始截图近方形 → 槽 250px 起；内容流/列表截图用 `object-fit:cover` 裁边；主页头部信息密集的截图加 `object-position:top center` 保留顶部数据）。
+   - 竖排多图页（交叉发现页：左栏截图+文字、右栏图表+结论）每栏总高控制在内容区可用高度内：截图槽 180–250px，塔/条图最高值按可用高度反推（如 4 塔 190/136/68/40px），gaprow + foot 必须留在页面内。
+   - 布局后余量：foot 底边距页面底 ≥30px，否则继续压缩槽位或图表高度。
+3. **元素自动撑开页面**：大字号一律限高（`min(Xvw,Yvh)`），卡片内容超限时拆页或换版式，不缩小字号硬塞。
+4. **图片重复**：每张截图只出现一次；表达多个点时用一张图描述不同内容，或截新图。
+5. **截图内嵌**：交付为单 HTML 链接时，截图用 base64 内嵌（每张 JPEG 压到 1400px、quality 84，4 张约 0.9MB，全文件 ≤1MB），不引用外部相对路径。
+6. **scrollHeight 检查陷阱（本次已踩）**：`.page` 通常有 `overflow:hidden`，内部元素溢出会被**裁剪而不撑高容器**——此时 `.slide.active` 的 `scrollHeight` 仍等于 1080，自检"通过"但内容实际已被裁掉（gaprow/foot 消失）。**必须做元素级越界审计**：遍历 `.page` 内所有元素 `getBoundingClientRect()`，任何 `rect.right>1920 / rect.bottom>1080 / rect.left<0 / rect.top<0` 即报错；并检查关键槽位（`.foot` / `.gaprow` / `.totalrow`）的 rect 是否在页面内。只看 scrollHeight 不算验证。
+7. **base64 内嵌后编辑技巧**：内嵌截图的 HTML 单行可达几十万 token，`Read`/`Edit` 会失败（超行长度限制）。改这类文件用脚本精确替换（python 读全文 → 按唯一锚点字符串 replace → 写回），不要逐行读取编辑；锚点避免选图片 src（已被 base64 占据），用图片的 `alt`、相邻 class 或文本内容定位。
 
 ## 4. 渲染自检（交付前必做）
 
 用 Playwright 脚本（node + `/opt/vm/preinstall/npm-global/lib/node_modules/playwright`，chromium 可执行 `/opt/vm/preinstall/ms-playwright/chromium-1169/chrome-linux/chrome`）：
 
 1. 逐页 `keyboard.press('ArrowRight')` 截图（1600×900），收集 `pageerror`。
-2. 每页检查 `page.scrollHeight === 1080`（无溢出）。
-3. 对含图片格的页面检查格子 `getBoundingClientRect()`：行数、高度均分、无越界（防塌陷复发）。
+2. **元素级越界审计（代替只看 scrollHeight）**：逐页遍历 `.page` 内所有元素 `getBoundingClientRect()`，任何元素越出 1920×1080 即报错；并输出关键槽位（`.foot` / `.gaprow` / `.totalrow`）的 top/bottom，确认都在页面内且 foot 底边距 ≥30px。
+3. 对含图片格的页面检查格子 rect：行数、高度均分、截图槽为定高（防塌陷与自然高度撑页复发）。
 4. 肉眼过一遍拼接图：无大面积留白、无重叠、数据与截图清晰。
-5. 全部通过才 `present_files` 交付；交付后用户再反馈问题 → 回到第 5 条"改一处必重渲染"。
+5. 全部通过才 `present_files` 交付；交付后用户再反馈问题 → 修改 HTML 后必须重新渲染该页验证（布局几何 + 无溢出 + 无 JS 错误）再重新交付，旧链接作废不发。
 
-## 5. 报告内容（9 页结构，沿用 report-spec.md）
+## 5. 报告内容（默认双维结构，见 brand-strategy-guide.md Step C）
 
-封面 → 账号量级(9宫格) → 内容方向(条形图) → 产出节奏(柱塔+店铺截图) → 账号矩阵(六格+搜索TAB截图) → 经销商/职人(说明+KPI+作品列表截图) → KOL(四类) → AI三模块(ledger+主号内容流截图) → 收束(左强调色栏核心主张+右3条takeaways)。
-措辞、截图使用、比例区间口径见 `report-spec.md`。
+默认 = 内容产能 × 品牌策略双维交叉报告：封面 → 品牌策略现状 → 新品与市场 → 内容产能现状 → 交叉发现（2–3 页）→ 机会与可探讨方向 → 收束。单维快速版（用户明确只要内容维度时）：封面 → 账号量级(9宫格) → 内容方向(条形图) → 产出节奏(柱塔+店铺截图) → 账号矩阵(六格+搜索TAB截图) → 经销商/职人(说明+KPI+作品列表截图) → KOL/达人(四类) → AI三模块(ledger+主号内容流截图) → 收束(左强调色栏核心主张+右3条takeaways)。
+措辞（含黑话白话对照）、截图使用、比例区间口径见 `report-spec.md`。
